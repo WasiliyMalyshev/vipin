@@ -16,6 +16,7 @@
 # (в Cloudflare — режим "DNS only", без оранжевого облака).
 
 set -euo pipefail
+trap 'echo -e "\e[31m[x]\e[0m Ошибка в строке $LINENO: $BASH_COMMAND (код $?)" >&2' ERR
 
 STATE_DIR=/etc/vipin
 STATE_ENV=$STATE_DIR/server.env
@@ -51,7 +52,7 @@ gen_keys() {
   local out
   out=$(xray x25519)
   PRIV=$(awk -F': ' '/^Private ?[Kk]ey/ {print $2}' <<<"$out")
-  PUB=$(awk -F': ' '/^Public ?[Kk]ey|^Password/ {print $2}' <<<"$out" | head -1)
+  PUB=$(awk -F': ' '/^Public ?[Kk]ey|^Password/ && !f {print $2; f=1}' <<<"$out")
   [[ -n $PRIV && -n $PUB ]] || die "Не удалось разобрать вывод 'xray x25519':\n$out"
 }
 
@@ -356,11 +357,12 @@ do_install() {
 
   info "Устанавливаю Xray"
   bash -c "$(curl -fsSL https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install >/dev/null
-  xray version | head -1
+  # без "| head": head закрывает канал раньше, xray получает SIGPIPE (141), и set -e обрывает скрипт
+  xray version | sed -n 1p
 
   info "Файрвол: открываю 22, 80, 443"
   local sshport
-  sshport=$(sshd -T 2>/dev/null | awk '/^port /{print $2; exit}'); sshport=${sshport:-22}
+  sshport=$(sshd -T 2>/dev/null | awk '/^port / && !p {p=$2} END {print p}' || true); sshport=${sshport:-22}
   ufw allow "$sshport"/tcp >/dev/null; ufw allow 80/tcp >/dev/null; ufw allow 443/tcp >/dev/null
   ufw --force enable >/dev/null
 
